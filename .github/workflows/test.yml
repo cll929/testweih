@@ -42,6 +42,14 @@ jobs:
         WEIRDHOST_SERVER_URLS: ${{ secrets.WEIRDHOST_SERVER_URLS }}
       run: python test.py
       
+    - name: Upload screenshots (on failure)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: screenshots
+        path: screenshots
+
+      
     - name: Commit README file
       run: |
         git config user.name "github-actions[bot]"

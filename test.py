@@ -698,11 +698,9 @@ class WeirdhostAuto:
             }
             
             # 创建README内容
-            readme_content = f"""# Weirdhost 自动续期和启动脚本
+            readme_content = f"""# 续期执行结果
 
 **最后运行时间**: `{timestamp}` (北京时间)
-
-**注意**: 此版本已针对CF五秒盾进行优化，增加了等待和检测逻辑
 
 ## 运行结果
 
@@ -744,15 +742,7 @@ class WeirdhostAuto:
 - 成功启动: {successful_starts}/{total_servers}
 - 运行时间: {timestamp}
 
-## CF五秒盾处理说明
 
-1. 脚本已增加CF挑战检测功能
-2. 检测到CF挑战时会自动等待10-15秒
-3. 如果按钮被CF屏蔽，会尝试刷新页面重试
-4. 增加了人类行为模拟（延迟、悬停）
-
-> 注意：如果续期按钮显示"不可用(可能被CF屏蔽)"，通常等待一段时间后重试即可。
-> 脚本每天运行一次即可，多次运行不会有额外效果。
 """
             
             # 写入README文件

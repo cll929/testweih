@@ -1,187 +1,151 @@
 import os
 import time
-from datetime import datetime, timezone, timedelta
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from datetime import datetime
+from playwright.sync_api import sync_playwright, TimeoutError
 
-SERVER_URLS = [u.strip() for u in os.getenv("WEIRDHOST_SERVER_URLS", "").split(",") if u.strip()]
-EMAIL = os.getenv("WEIRDHOST_EMAIL")
-PASSWORD = os.getenv("WEIRDHOST_PASSWORD")
+# ========== 配置区 ==========
+SERVER_URLS = [
+    "https://hub.weirdhost.xyz/server/xxxxxxxx"
+]
+
 REMEMBER_COOKIE = os.getenv("REMEMBER_WEB_COOKIE")
+SCREENSHOT_DIR = "screenshots"
+HEADLESS = True
+# ===========================
 
-TZ_CN = timezone(timedelta(hours=8))
+
+def now():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def now_cn():
-    return datetime.now(TZ_CN).strftime("%Y-%m-%d %H:%M:%S")
+def ensure_dir():
+    if not os.path.exists(SCREENSHOT_DIR):
+        os.makedirs(SCREENSHOT_DIR)
 
 
 def screenshot(page, name):
-    os.makedirs("screenshots", exist_ok=True)
-    path = f"screenshots/{name}.png"
+    path = f"{SCREENSHOT_DIR}/{name}"
     page.screenshot(path=path, full_page=True)
-    print(f"📸 已保存截图: {path}")
+    print(f"📸 截图保存: {path}")
 
 
-def wait_cf_challenge(page):
-    # Cloudflare 五秒盾 / 包装页
-    if page.locator("text=Cloudflare").count() > 0:
-        print("🛡️ 检测到 Cloudflare，等待 15 秒")
-        page.wait_for_timeout(15000)
+def wait_cf(page):
+    print("⏳ 等待 Cloudflare...")
+    for _ in range(30):
+        if "Checking your browser" not in page.content():
+            return
+        time.sleep(1)
+
+
+def inject_cookie(context):
+    if not REMEMBER_COOKIE:
+        raise RuntimeError("❌ 未设置 REMEMBER_WEB_COOKIE")
+
+    context.add_cookies([{
+        "name": "remember_web",
+        "value": REMEMBER_COOKIE,
+        "domain": "hub.weirdhost.xyz",
+        "path": "/",
+        "httpOnly": True,
+        "secure": True
+    }])
 
 
 def get_expire_text(page):
-    """
-    获取『유통기한 xxxx』文本
-    """
-    selectors = [
-        "text=/유통기한\\s*\\d{4}-\\d{2}-\\d{2}/",
-        "text=/Expire/i",
-        "text=/到期/",
+    try:
+        el = page.locator("text=/\\d{4}-\\d{2}-\\d{2}/").first
+        return el.text_content()
+    except:
+        return None
+
+
+def renew_server(page, url, idx):
+    print(f"\n🚀 处理服务器 {idx + 1}")
+    page.goto(url, wait_until="domcontentloaded", timeout=60000)
+    wait_cf(page)
+    screenshot(page, f"server_{idx}_loaded.png")
+
+    before = get_expire_text(page)
+    print(f"📅 续期前到期时间: {before}")
+
+    # 多 selector 兜底
+    renew_selectors = [
+        'button:has-text("시간추가")',
+        'button:has-text("연장")',
+        'text=시간추가'
     ]
-    for sel in selectors:
+
+    btn = None
+    for sel in renew_selectors:
         try:
-            loc = page.locator(sel).first
-            if loc.count() > 0:
-                return loc.inner_text().strip()
+            btn = page.locator(sel).first
+            if btn.is_visible():
+                break
         except:
             pass
-    return None
 
-
-def login(page):
-    page.goto("https://hub.weirdhost.xyz/login", timeout=60000)
-    wait_cf_challenge(page)
-
-    if REMEMBER_COOKIE:
-        print("🍪 使用 Cookie 登录")
-        page.context.add_cookies([{
-            "name": "remember_web",
-            "value": REMEMBER_COOKIE,
-            "domain": "hub.weirdhost.xyz",
-            "path": "/",
-            "httpOnly": True,
-            "secure": True
-        }])
-        page.goto("https://hub.weirdhost.xyz", timeout=60000)
-        wait_cf_challenge(page)
-        return
-
-    print("🔐 使用账号密码登录")
-    page.fill('input[name="email"]', EMAIL)
-    page.fill('input[name="password"]', PASSWORD)
-    page.click('button[type="submit"]')
-    page.wait_for_timeout(5000)
-
-
-def wait_server_page_ready(page):
-    """
-    判断是否真的进入了服务器控制页
-    """
-    try:
-        page.wait_for_selector("button", timeout=15000)
-        return True
-    except PlaywrightTimeoutError:
-        return False
-
-
-def find_renew_button(page):
-    """
-    超宽松 selector，避免 WeirdHost UI / 语言变化
-    """
-    selectors = [
-        'button:has-text("시간")',
-        'button:has-text("추가")',
-        'button:has-text("Add")',
-        'button:has-text("Time")',
-        'button svg',          # 图标按钮兜底
-    ]
-    for sel in selectors:
-        loc = page.locator(sel)
-        if loc.count() > 0:
-            return loc.first
-    return None
-
-
-def renew_server(page, server_url):
-    print(f"\n🚀 处理服务器: {server_url}")
-    page.goto(server_url, timeout=60000)
-    wait_cf_challenge(page)
-
-    if not wait_server_page_ready(page):
-        print("❌ 页面未加载到服务器控制页")
-        screenshot(page, "page_not_ready")
-        return "page_not_ready"
-
-    before_expire = get_expire_text(page)
-    print("📅 续期前到期时间:", before_expire)
-
-    if before_expire is None:
-        print("⚠️ 未读取到到期时间，截图")
-        screenshot(page, "expire_not_found_before")
-
-    renew_btn = find_renew_button(page)
-    if not renew_btn:
-        print("❌ 未找到续期按钮，截图")
-        screenshot(page, "no_renew_button")
+    if not btn or not btn.is_visible():
+        screenshot(page, f"server_{idx}_no_button.png")
+        print("❌ 未找到续期按钮")
         return "no_button"
 
-    popup_success = False
-    expire_changed = False
-
-    try:
-        renew_btn.click()
-        print("🖱️ 已点击续期按钮")
-    except PlaywrightTimeoutError:
-        print("❌ 点击续期按钮超时")
-        screenshot(page, "click_timeout")
-        return "click_failed"
-
-    # 等待“成功”弹窗（你截图里的那个）
-    try:
-        page.locator("text=成功").wait_for(timeout=8000)
-        popup_success = True
-        print("🎉 捕获到『成功』弹窗")
-    except PlaywrightTimeoutError:
-        print("⚠️ 未检测到成功弹窗")
-
+    print("🖱️ 点击续期按钮")
+    btn.click()
     page.wait_for_timeout(3000)
-    page.reload()
-    wait_cf_challenge(page)
 
-    after_expire = get_expire_text(page)
-    print("📅 续期后到期时间:", after_expire)
+    # 判断弹窗成功提示
+    success = False
+    popup_texts = ["성공", "완료", "추가되었습니다"]
 
-    if after_expire is None:
-        screenshot(page, "expire_not_found_after")
+    for _ in range(10):
+        content = page.content()
+        if any(t in content for t in popup_texts):
+            success = True
+            break
+        time.sleep(1)
 
-    if before_expire and after_expire and before_expire != after_expire:
-        popup_success = True
-        expire_changed = True
-        print("✅ 到期时间发生变化")
+    screenshot(page, f"server_{idx}_after_click.png")
 
-    if popup_success or expire_changed:
-        return "renew_confirmed"
+    page.reload(wait_until="domcontentloaded")
+    wait_cf(page)
 
-    screenshot(page, "renew_clicked_but_not_effective")
-    return "renew_clicked_but_not_effective"
+    after = get_expire_text(page)
+    print(f"📅 续期后到期时间: {after}")
+
+    if success or (before and after and before != after):
+        print("🎉 续期成功")
+        return "success"
+
+    print("⚠️ 点击完成，但未确认成功")
+    return "uncertain"
 
 
 def main():
-    print(f"🕒 开始执行 WeirdHost 自动续期 | {now_cn()}")
-
-    if not SERVER_URLS:
-        raise RuntimeError("❌ 未配置 WEIRDHOST_SERVER_URLS")
+    ensure_dir()
+    print(f"🕒 开始执行 WeirdHost Cookie-only 自动续期 | {now()}")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(
+            headless=HEADLESS,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-dev-shm-usage"
+            ]
+        )
         context = browser.new_context()
+        inject_cookie(context)
+
         page = context.new_page()
 
-        login(page)
+        # ⚠️ 只访问首页，不碰 /login
+        page.goto("https://hub.weirdhost.xyz", wait_until="domcontentloaded", timeout=60000)
+        wait_cf(page)
+        screenshot(page, "homepage.png")
 
         results = {}
-        for url in SERVER_URLS:
-            results[url] = renew_server(page, url)
+        for i, url in enumerate(SERVER_URLS):
+            results[url] = renew_server(page, url, i)
 
         browser.close()
 
